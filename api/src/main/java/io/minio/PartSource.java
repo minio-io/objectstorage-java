@@ -27,8 +27,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import javax.annotation.Nonnull;
-import okio.Okio;
-import okio.Source;
 
 /** Part source information. */
 class PartSource {
@@ -41,8 +39,6 @@ class PartSource {
   private long position;
 
   private ByteBufferStream[] buffers;
-
-  private InputStream inputStream;
 
   private PartSource(int partNumber, long size, String md5Hash, String sha256Hash) {
     this.partNumber = partNumber;
@@ -69,11 +65,6 @@ class PartSource {
     this.buffers = Objects.requireNonNull(buffers, "buffers must not be null");
   }
 
-  public PartSource(@Nonnull InputStream inputStream, long size) {
-    this(0, size, null, null);
-    this.inputStream = Objects.requireNonNull(inputStream, "input stream must not be null");
-  }
-
   public int partNumber() {
     return this.partNumber;
   }
@@ -90,18 +81,14 @@ class PartSource {
     return this.sha256Hash;
   }
 
-  public Source source() throws IOException {
+  public InputStream inputStream() throws IOException {
     if (this.file != null) {
       this.file.seek(this.position);
-      return Okio.source(Channels.newInputStream(this.file.getChannel()));
-    }
-
-    if (this.inputStream != null) {
-      return Okio.source(this.inputStream);
+      return Channels.newInputStream(this.file.getChannel());
     }
 
     InputStream stream = buffers[0].inputStream();
-    if (buffers.length == 1) return Okio.source(stream);
+    if (buffers.length == 1) return stream;
 
     List<InputStream> streams = new ArrayList<>();
     streams.add(stream);
@@ -109,7 +96,7 @@ class PartSource {
       if (buffers[i].size() == 0) break;
       streams.add(buffers[i].inputStream());
     }
-    if (streams.size() == 1) return Okio.source(stream);
-    return Okio.source(new SequenceInputStream(Collections.enumeration(streams)));
+    if (streams.size() == 1) return stream;
+    return new SequenceInputStream(Collections.enumeration(streams));
   }
 }

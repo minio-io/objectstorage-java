@@ -14,12 +14,11 @@
  * limitations under the License.
  */
 
-package io.minio.http;
+package io.minio;
 
-import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
-import io.minio.org.apache.commons.validator.routines.InetAddressValidator;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.security.GeneralSecurityException;
 import java.security.KeyManagementException;
 import java.security.KeyStore;
@@ -31,7 +30,7 @@ import java.security.cert.X509Certificate;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Pattern;
+import javax.annotation.Nonnull;
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.KeyManagerFactory;
@@ -41,107 +40,15 @@ import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
-import okhttp3.HttpUrl;
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Protocol;
+import okio.BufferedSink;
+import okio.Okio;
 
 /** HTTP utilities. */
-public class HttpUtils {
-  public static final String AWS_S3_PREFIX =
-      "^(((bucket\\.|accesspoint\\.)"
-          + "vpce(-(?!_)[a-z_\\d]+(?<!-)(?<!_))+\\.s3\\.)|"
-          + "((?!s3)(?!-)(?!_)[a-z_\\d-]{1,63}(?<!-)(?<!_)\\.)"
-          + "s3-control(-(?!_)[a-z_\\d]+(?<!-)(?<!_))*\\.|"
-          + "(s3(-(?!_)[a-z_\\d]+(?<!-)(?<!_))*\\.))";
-
-  public static final Pattern HOSTNAME_REGEX =
-      Pattern.compile(
-          "^((?!-)(?!_)[a-z_\\d-]{1,63}(?<!-)(?<!_)\\.)*"
-              + "((?!_)(?!-)[a-z_\\d-]{1,63}(?<!-)(?<!_))$",
-          Pattern.CASE_INSENSITIVE);
-  public static final Pattern AWS_ENDPOINT_REGEX =
-      Pattern.compile(".*\\.amazonaws\\.com(|\\.cn)$", Pattern.CASE_INSENSITIVE);
-  public static final Pattern AWS_S3_ENDPOINT_REGEX =
-      Pattern.compile(
-          AWS_S3_PREFIX
-              + "((?!s3)(?!-)(?!_)[a-z_\\d-]{1,63}(?<!-)(?<!_)\\.)*amazonaws\\.com(|\\.cn)$",
-          Pattern.CASE_INSENSITIVE);
-  public static final Pattern AWS_ELB_ENDPOINT_REGEX =
-      Pattern.compile(
-          "^(?!-)(?!_)[a-z_\\d-]{1,63}(?<!-)(?<!_)\\."
-              + "(?!-)(?!_)[a-z_\\d-]{1,63}(?<!-)(?<!_)\\."
-              + "elb\\.amazonaws\\.com$",
-          Pattern.CASE_INSENSITIVE);
-  public static final Pattern AWS_S3_PREFIX_REGEX =
-      Pattern.compile(AWS_S3_PREFIX, Pattern.CASE_INSENSITIVE);
-  public static final Pattern REGION_REGEX =
-      Pattern.compile("^((?!_)(?!-)[a-z_\\d-]{1,63}(?<!-)(?<!_))$", Pattern.CASE_INSENSITIVE);
-
-  public static final byte[] EMPTY_BODY = new byte[] {};
-
-  public static void validateNotNull(Object arg, String argName) {
-    if (arg == null) {
-      throw new IllegalArgumentException(argName + " must not be null.");
-    }
-  }
-
-  public static void validateNotEmptyString(String arg, String argName) {
-    validateNotNull(arg, argName);
-    if (arg.isEmpty()) {
-      throw new IllegalArgumentException(argName + " must be a non-empty string.");
-    }
-  }
-
-  public static void validateNullOrNotEmptyString(String arg, String argName) {
-    if (arg != null && arg.isEmpty()) {
-      throw new IllegalArgumentException(argName + " must be a non-empty string.");
-    }
-  }
-
-  public static void validateHostnameOrIPAddress(String endpoint) {
-    // Check endpoint is IPv4 or IPv6.
-    if (InetAddressValidator.getInstance().isValid(endpoint)) {
-      return;
-    }
-
-    if (!HOSTNAME_REGEX.matcher(endpoint).find()) {
-      throw new IllegalArgumentException("invalid hostname " + endpoint);
-    }
-  }
-
-  public static void validateUrl(HttpUrl url) {
-    if (!url.encodedPath().equals("/")) {
-      throw new IllegalArgumentException("no path allowed in endpoint " + url);
-    }
-  }
-
-  public static HttpUrl getBaseUrl(String endpoint) {
-    validateNotEmptyString(endpoint, "endpoint");
-    HttpUrl url = HttpUrl.parse(endpoint);
-    if (url == null) {
-      validateHostnameOrIPAddress(endpoint);
-      url = new HttpUrl.Builder().scheme("https").host(endpoint).build();
-    } else {
-      validateUrl(url);
-    }
-
-    return url;
-  }
-
-  public static String getHostHeader(HttpUrl url) {
-    String host = url.host();
-    if (InetAddressValidator.getInstance().isValidInet6Address(host)) {
-      host = "[" + host + "]";
-    }
-
-    // ignore port when port and service matches i.e HTTP -> 80, HTTPS -> 443
-    if ((url.scheme().equals("http") && url.port() == 80)
-        || (url.scheme().equals("https") && url.port() == 443)) {
-      return host;
-    }
-
-    return host + ":" + url.port();
-  }
+public class Http {
+  public static final long DEFAULT_TIMEOUT = TimeUnit.MINUTES.toMillis(5);
 
   private static OkHttpClient enableJKSPKCS12Certificates(
       OkHttpClient httpClient,
@@ -264,14 +171,13 @@ public class HttpUtils {
         .build();
   }
 
-  public static OkHttpClient newDefaultHttpClient(
-      long connectTimeout, long writeTimeout, long readTimeout) {
+  public static OkHttpClient newDefaultClient() {
     OkHttpClient httpClient =
         new OkHttpClient()
             .newBuilder()
-            .connectTimeout(connectTimeout, TimeUnit.MILLISECONDS)
-            .writeTimeout(writeTimeout, TimeUnit.MILLISECONDS)
-            .readTimeout(readTimeout, TimeUnit.MILLISECONDS)
+            .connectTimeout(DEFAULT_TIMEOUT, TimeUnit.MILLISECONDS)
+            .writeTimeout(DEFAULT_TIMEOUT, TimeUnit.MILLISECONDS)
+            .readTimeout(DEFAULT_TIMEOUT, TimeUnit.MILLISECONDS)
             .protocols(Arrays.asList(Protocol.HTTP_1_1))
             .build();
     String filename = System.getenv("SSL_CERT_FILE");
@@ -285,7 +191,9 @@ public class HttpUtils {
     return httpClient;
   }
 
-  @SuppressFBWarnings(value = "SIC", justification = "Should not be used in production anyways.")
+  @edu.umd.cs.findbugs.annotations.SuppressFBWarnings(
+      value = "SIC",
+      justification = "Should not be used in production anyways.")
   public static OkHttpClient disableCertCheck(OkHttpClient client)
       throws KeyManagementException, NoSuchAlgorithmException {
     final TrustManager[] trustAllCerts =
@@ -331,5 +239,61 @@ public class HttpUtils {
         .writeTimeout(writeTimeout, TimeUnit.MILLISECONDS)
         .readTimeout(readTimeout, TimeUnit.MILLISECONDS)
         .build();
+  }
+
+  /** RequestBody that wraps a single data object. */
+  public static class RequestBody extends okhttp3.RequestBody {
+    private InputStream stream;
+    private byte[] bytes;
+    private long length;
+    private MediaType contentType;
+
+    private RequestBody(@Nonnull final MediaType contentType, final long length) {
+      this.contentType = Utils.validateNotNull(contentType, "content type");
+      if (length < 0) throw new IllegalArgumentException("length must not be negative value");
+      this.length = length;
+    }
+
+    public RequestBody(
+        @Nonnull final byte[] bytes, final int length, @Nonnull final MediaType contentType) {
+      this(contentType, length);
+      this.bytes = Utils.validateNotNull(bytes, "data bytes");
+    }
+
+    public RequestBody(
+        @Nonnull final InputStream stream,
+        final long length,
+        @Nonnull final MediaType contentType) {
+      this(contentType, length);
+      this.stream = Utils.validateNotNull(stream, "stream");
+    }
+
+    @Override
+    public MediaType contentType() {
+      return contentType;
+    }
+
+    @Override
+    public long contentLength() {
+      return length;
+    }
+
+    @Override
+    public void writeTo(BufferedSink sink) throws IOException {
+      if (stream != null) {
+        sink.write(Okio.source(stream), length);
+      } else {
+        sink.write(bytes, 0, (int) length);
+      }
+    }
+  }
+
+  /** HTTP methods. */
+  public static enum Method {
+    GET,
+    HEAD,
+    POST,
+    PUT,
+    DELETE;
   }
 }
