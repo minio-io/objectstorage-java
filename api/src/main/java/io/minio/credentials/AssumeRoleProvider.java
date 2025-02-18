@@ -16,9 +16,9 @@
 
 package io.minio.credentials;
 
-import io.minio.Digest;
 import io.minio.Signer;
 import io.minio.Time;
+import io.minio.Utils;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.ProviderException;
@@ -95,7 +95,7 @@ public class AssumeRoleProvider extends AssumeRoleBaseProvider {
     }
 
     String data = urlBuilder.build().encodedQuery();
-    this.contentSha256 = Digest.sha256Hash(data);
+    this.contentSha256 = Utils.sha256Hash(data);
     this.request =
         new Request.Builder()
             .url(url)
